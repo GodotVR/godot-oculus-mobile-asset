@@ -30,7 +30,7 @@ if interface and interface.initialize()
 	get_viewport().arvr = true
 
 	# change our physics fps
-	Engine.target_fps = 72
+	Engine.iterations_per_second = 72 # Quest
 ```
 
 Licensing

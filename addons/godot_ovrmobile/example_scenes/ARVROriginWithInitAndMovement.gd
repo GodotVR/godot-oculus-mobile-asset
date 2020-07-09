@@ -22,11 +22,16 @@ var ovr_guardian_system = null;
 var ovr_tracking_transform = null;
 var ovr_utilities = null;
 var ovr_vr_api_proxy = null;
+var ovr_input = null;
 
+# Dictionary tracking the remaining duration for controllers vibration
+var controllers_vibration_duration = {}
 
 # some of the Oculus VrAPI constants are defined in this file. Have a look into it to learn more
 var ovrVrApiTypes = load("res://addons/godot_ovrmobile/OvrVrApiTypes.gd").new();
 
+# react to the worldscale changing
+var was_world_scale = 1.0
 
 func _ready():
 	_initialize_ovr_mobile_arvr_interface();
@@ -35,6 +40,8 @@ func _ready():
 func _process(delta_t):
 	_check_and_perform_runtime_config()
 	_check_move(delta_t)
+	_check_worldscale()
+	_update_controllers_vibration(delta_t)
 
 
 # this code check for the OVRMobile inteface; and if successful also initializes the
@@ -54,7 +61,7 @@ func _initialize_ovr_mobile_arvr_interface():
 		# Configure the interface init parameters.
 		if arvr_interface.initialize():
 			get_viewport().arvr = true
-			Engine.target_fps = 72 # Quest
+			Engine.iterations_per_second = 72 # Quest
 
 			# load the .gdns classes.
 			ovr_display_refresh_rate = load("res://addons/godot_ovrmobile/OvrDisplayRefreshRate.gdns");
@@ -63,6 +70,7 @@ func _initialize_ovr_mobile_arvr_interface():
 			ovr_tracking_transform = load("res://addons/godot_ovrmobile/OvrTrackingTransform.gdns");
 			ovr_utilities = load("res://addons/godot_ovrmobile/OvrUtilities.gdns");
 			ovr_vr_api_proxy = load("res://addons/godot_ovrmobile/OvrVrApiProxy.gdns");
+			ovr_input = load("res://addons/godot_ovrmobile/OvrInput.gdns")
 
 			# and now instance the .gdns classes for use if load was successfull
 			if (ovr_display_refresh_rate): ovr_display_refresh_rate = ovr_display_refresh_rate.new()
@@ -71,6 +79,10 @@ func _initialize_ovr_mobile_arvr_interface():
 			if (ovr_tracking_transform): ovr_tracking_transform = ovr_tracking_transform.new()
 			if (ovr_utilities): ovr_utilities = ovr_utilities.new()
 			if (ovr_vr_api_proxy): ovr_vr_api_proxy = ovr_vr_api_proxy.new()
+			if (ovr_input): ovr_input = ovr_input.new()
+
+			# Connect to the plugin signals
+			_connect_to_signals()
 
 			print("Loaded OVRMobile")
 			return true
@@ -78,7 +90,36 @@ func _initialize_ovr_mobile_arvr_interface():
 			print("Failed to enable OVRMobile")
 			return false
 
+func _connect_to_signals():
+	if Engine.has_singleton("OVRMobile"):
+		var singleton = Engine.get_singleton("OVRMobile")
+		print("Connecting to OVRMobile signals")
+		singleton.connect("HeadsetMounted", self, "_on_headset_mounted")
+		singleton.connect("HeadsetUnmounted", self, "_on_headset_unmounted")
+		singleton.connect("InputFocusGained", self, "_on_input_focus_gained")
+		singleton.connect("InputFocusLost", self, "_on_input_focus_lost")
+		singleton.connect("EnterVrMode", self, "_on_enter_vr_mode")
+		singleton.connect("LeaveVrMode", self, "_on_leave_vr_mode")
+	else:
+		print("Unable to load OVRMobile singleton...")
 
+func _on_headset_mounted():
+	print("VR headset mounted")
+
+func _on_headset_unmounted():
+	print("VR headset unmounted")
+
+func _on_input_focus_gained():
+	print("Input focus gained")
+
+func _on_input_focus_lost():
+	print("Input focus lost")
+
+func _on_enter_vr_mode():
+	print("Entered Oculus VR mode")
+
+func _on_leave_vr_mode():
+	print("Left Oculus VR mode")
 
 # many settings should only be applied once when running; this variable
 # gets reset on application start or when it wakes up from sleep
@@ -132,6 +173,27 @@ func _check_move(delta_t):
 		self.transform.origin += strafe_dir * move_vector.x * delta_t;
 
 
+func _start_controller_vibration(controller, duration, rumble_intensity):
+	print("Starting vibration of controller " + str(controller) + " for " + str(duration) + "  at " + str(rumble_intensity))
+	controllers_vibration_duration[controller.controller_id] = duration
+	controller.set_rumble(rumble_intensity)
+
+func _update_controllers_vibration(delta_t):
+	# Check if there are any controllers currently vibrating
+	if (controllers_vibration_duration.empty()):
+		return
+
+	# Update the remaining vibration duration for each controller
+	for i in ARVRServer.get_tracker_count():
+		var tracker = ARVRServer.get_tracker(i)
+		if (controllers_vibration_duration.has(tracker.get_tracker_id())):
+			var remaining_duration = controllers_vibration_duration[tracker.get_tracker_id()] - (delta_t * 1000)
+			if (remaining_duration < 0):
+				controllers_vibration_duration.erase(tracker.get_tracker_id())
+				tracker.set_rumble(0)
+			else:
+				controllers_vibration_duration[tracker.get_tracker_id()] = remaining_duration
+
 # current button mapping for the touch controller
 # godot itself also exposes some of these constants via JOY_VR_* and JOY_OCULUS_*
 # this enum here is to document everything in place and includes the touch event mappings
@@ -156,44 +218,51 @@ enum CONTROLLER_BUTTON {
 
 # this is a function connected to the button release signal from the controller
 func _on_LeftTouchController_button_pressed(button):
-	if (button != CONTROLLER_BUTTON.YB): return;
+	print("Primary controller id: " + str(ovr_input.get_primary_controller_id()))
 
-	# examples on using the ovr api from gdscript
-	if (ovr_guardian_system):
-		print(" ovr_guardian_system.get_boundary_visible() == " + str(ovr_guardian_system.get_boundary_visible()));
-		#ovr_guardian_system.request_boundary_visible(true); # make the boundary always visible
+	if (button == CONTROLLER_BUTTON.YB):
+		# examples on using the ovr api from gdscript
+		if (ovr_guardian_system):
+			print(" ovr_guardian_system.get_boundary_visible() == " + str(ovr_guardian_system.get_boundary_visible()));
+			#ovr_guardian_system.request_boundary_visible(true); # make the boundary always visible
 
-		# the oriented bounding box is the largest box that fits into the currently defined guardian
-		# the return value of this function is an array with [Transform(), Vector3()] where the Vector3
-		# is the scale of the box and Transform contains the position and orientation of the box.
-		# The height is not yet tracked by the oculus system and will be a default value.
-		print(" ovr_guardian_system.get_boundary_oriented_bounding_box() == " + str(ovr_guardian_system.get_boundary_oriented_bounding_box()));
+			# the oriented bounding box is the largest box that fits into the currently defined guardian
+			# the return value of this function is an array with [Transform(), Vector3()] where the Vector3
+			# is the scale of the box and Transform contains the position and orientation of the box.
+			# The height is not yet tracked by the oculus system and will be a default value.
+			print(" ovr_guardian_system.get_boundary_oriented_bounding_box() == " + str(ovr_guardian_system.get_boundary_oriented_bounding_box()));
 
-	if (ovr_tracking_transform):
-		print(" ovr_tracking_transform.get_tracking_space() == " + str(ovr_tracking_transform.get_tracking_space()));
+		if (ovr_tracking_transform):
+			print(" ovr_tracking_transform.get_tracking_space() == " + str(ovr_tracking_transform.get_tracking_space()));
 
-		# you can change the tracking space to control where the default floor level is and
-		# how recentring should behave.
-		#ovr_guardian_system.set_tracking_space(ovrVrApiTypes.OvrTrackingSpace.VRAPI_TRACKING_SPACE_STAGE);
+			# you can change the tracking space to control where the default floor level is and
+			# how recentring should behave.
+			#ovr_guardian_system.set_tracking_space(ovrVrApiTypes.OvrTrackingSpace.VRAPI_TRACKING_SPACE_STAGE);
 
-	if (ovr_utilities):
-		print(" ovr_utilities.get_ipd() == " + str(ovr_utilities.get_ipd()));
-		
-		# you can access the accelerations and velocitys for the head and controllers
-		# that are predicted by the Oculus VrApi via these funcitons:
-		var controller_id = $LeftTouchController.controller_id;
-		print(" ovr_utilities.get_controller_linear_velocity(controller_id) == " + str(ovr_utilities.get_controller_linear_velocity(controller_id)));
-		print(" ovr_utilities.get_controller_linear_acceleration(controller_id) == " + str(ovr_utilities.get_controller_linear_acceleration(controller_id)));
-		print(" ovr_utilities.get_controller_angular_velocity(controller_id) == " + str(ovr_utilities.get_controller_angular_velocity(controller_id)));
-		print(" ovr_utilities.get_controller_angular_acceleration(controller_id) == " + str(ovr_utilities.get_controller_angular_acceleration(controller_id)));
+		if (ovr_utilities):
+			print(" ovr_utilities.get_ipd() == " + str(ovr_utilities.get_ipd()));
 
+			# you can access the accelerations and velocitys for the head and controllers
+			# that are predicted by the Oculus VrApi via these funcitons:
+			var controller_id = $LeftTouchController.controller_id;
+			print(" ovr_utilities.get_controller_linear_velocity(controller_id) == " + str(ovr_utilities.get_controller_linear_velocity(controller_id)));
+			print(" ovr_utilities.get_controller_linear_acceleration(controller_id) == " + str(ovr_utilities.get_controller_linear_acceleration(controller_id)));
+			print(" ovr_utilities.get_controller_angular_velocity(controller_id) == " + str(ovr_utilities.get_controller_angular_velocity(controller_id)));
+			print(" ovr_utilities.get_controller_angular_acceleration(controller_id) == " + str(ovr_utilities.get_controller_angular_acceleration(controller_id)));
+
+	if (button == CONTROLLER_BUTTON.XA):
+		_start_controller_vibration($LeftTouchController, 40, 0.5)
 
 func _on_RightTouchController_button_pressed(button):
-	if (button != CONTROLLER_BUTTON.YB): return;
+	print("Primary controller id: " + str(ovr_input.get_primary_controller_id()))
 
-	if (ovr_utilities):
-		# use this for fade to black for example: here we just do a color change
-		ovr_utilities.set_default_layer_color_scale(Color(0.5, 0.0, 1.0, 1.0));
+	if (button == CONTROLLER_BUTTON.YB):
+		if (ovr_utilities):
+			# use this for fade to black for example: here we just do a color change
+			ovr_utilities.set_default_layer_color_scale(Color(0.5, 0.0, 1.0, 1.0));
+
+	if (button == CONTROLLER_BUTTON.XA):
+		_start_controller_vibration($RightTouchController, 40, 0.5)
 
 
 func _on_RightTouchController_button_release(button):
@@ -202,3 +271,11 @@ func _on_RightTouchController_button_release(button):
 	if (ovr_utilities):
 		# reset the color to neutral again
 		ovr_utilities.set_default_layer_color_scale(Color(1.0, 1.0, 1.0, 1.0));
+
+func _check_worldscale():
+	if was_world_scale != world_scale:
+		was_world_scale = world_scale
+		var inv_world_scale = 1.0 / was_world_scale
+		var controller_scale = Vector3(inv_world_scale, inv_world_scale, inv_world_scale)
+		$"LeftTouchController/left-controller".scale = controller_scale
+		$"RightTouchController/right-controller".scale = -controller_scale
