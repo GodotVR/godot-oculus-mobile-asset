@@ -3,7 +3,7 @@ This module is provided as is, all files are contained within the addons/godot-o
 
 This module requires **Godot 3.2 or newer** to run.
 
-This module adds support for running Godot VR games on Oculus Go and Oculus Quest devices.
+This module adds support for running Godot VR games on Oculus Quest devices.
 For other VR devices please see other plugins that have been made available 
 
 Source code for this module can be found here:
